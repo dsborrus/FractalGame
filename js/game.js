@@ -436,6 +436,23 @@ ui.mute.addEventListener('click', () => {
 });
 applyMute();
 
+// Pause when the tab is hidden: the browser freezes rAF (and thus judging)
+// while WebAudio keeps playing. Stop the clock; re-anchor cleanly on return.
+document.addEventListener('visibilitychange', () => {
+  if (mode !== 'playing') return;
+  if (document.hidden) {
+    if (hold) { hold.tone && hold.tone.end(false); hold = null; }
+    music.stop();
+    setHint('paused');
+  } else {
+    phrase = null;
+    lastBeatNum = -1;
+    music.start();
+    music.setTempo(tierTempo(run.tier));
+    setHint('listen to the call — echo it back');
+  }
+});
+
 // ---------- leaderboard client ----------
 async function fetchScores(board = 'all') {
   try {
