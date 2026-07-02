@@ -1,8 +1,14 @@
 // api/leaderboard.js — Vercel serverless function backed by Upstash Redis.
+// Boards: all-time ("all") and daily ("daily", keyed by server UTC date).
 import { Redis } from '@upstash/redis';
 import { sanitizeName, validScore } from './_validate.js';
 
-const KEY = 'fractalbloom:leaderboard';
+const KEY_ALL = 'fractalbloom:leaderboard';
+const DAILY_TTL = 60 * 60 * 24 * 60; // keep daily boards for 60 days
+
+function dailyKey() {
+  return 'fractalbloom:daily:' + new Date().toISOString().slice(0, 10);
+}
 
 function getRedis() {
   const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
@@ -11,8 +17,8 @@ function getRedis() {
   return new Redis({ url, token });
 }
 
-async function topScores(redis) {
-  const raw = await redis.zrange(KEY, 0, 19, { rev: true, withScores: true });
+async function topScores(redis, key) {
+  const raw = await redis.zrange(key, 0, 19, { rev: true, withScores: true });
   const scores = [];
   if (Array.isArray(raw)) {
     if (raw.length && typeof raw[0] === 'object' && raw[0] !== null && 'member' in raw[0]) {
@@ -33,7 +39,9 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
-      return res.status(200).json({ scores: await topScores(redis) });
+      const board = req.query && req.query.board === 'daily' ? 'daily' : 'all';
+      const key = board === 'daily' ? dailyKey() : KEY_ALL;
+      return res.status(200).json({ board, scores: await topScores(redis, key) });
     }
 
     if (req.method === 'POST') {
@@ -41,9 +49,16 @@ export default async function handler(req, res) {
       const name = sanitizeName(body.name) || 'anon';
       const score = Number(body.score);
       if (!validScore(score)) return res.status(400).json({ error: 'invalid score' });
-      // Keep each player's best score only.
-      await redis.zadd(KEY, { gt: true }, { score, member: name });
-      return res.status(200).json({ ok: true, scores: await topScores(redis) });
+      const daily = body.board === 'daily';
+      // Keep each player's best score only (GT = only raise).
+      await redis.zadd(KEY_ALL, { gt: true }, { score, member: name });
+      if (daily) {
+        const dk = dailyKey();
+        await redis.zadd(dk, { gt: true }, { score, member: name });
+        await redis.expire(dk, DAILY_TTL);
+      }
+      const key = daily ? dailyKey() : KEY_ALL;
+      return res.status(200).json({ ok: true, scores: await topScores(redis, key) });
     }
 
     res.setHeader('Allow', 'GET, POST');

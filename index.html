@@ -19,8 +19,16 @@
 
 <div id="menu" class="screen">
   <h1>FRACTAL<span>bloom</span></h1>
-  <p class="tagline">tap with the pulse · grow the tree · bloom</p>
+  <p class="tagline">listen to the call · echo it back · bloom</p>
+  <div class="mode-row ui-block">
+    <button id="mode-endless" class="chip">endless</button>
+    <button id="mode-daily" class="chip">daily bloom</button>
+  </div>
   <div class="board-wrap ui-block">
+    <div class="tab-row">
+      <button id="tab-all" class="tab sel">all-time</button>
+      <button id="tab-daily" class="tab">today</button>
+    </div>
     <h2 id="menu-board-title">top blooms</h2>
     <ol id="menu-board"></ol>
   </div>
@@ -44,6 +52,10 @@
     <button id="submit-btn">submit score</button>
   </div>
   <div class="board-wrap ui-block">
+    <div class="tab-row">
+      <button id="over-tab-all" class="tab sel">all-time</button>
+      <button id="over-tab-daily" class="tab">today</button>
+    </div>
     <h2 id="board-title"></h2>
     <ol id="board"></ol>
   </div>

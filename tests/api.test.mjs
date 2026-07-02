@@ -2,12 +2,15 @@
 // Run: node tests/api.test.mjs   (requires npm install)
 import assert from 'node:assert/strict';
 
-// ---- fake Upstash REST backend ----
-const store = new Map(); // member -> score
+// ---- fake Upstash REST backend (multi-key) ----
+const stores = new Map(); // key -> Map(member -> score)
+const ttls = new Map();
+const keyStore = (k) => { if (!stores.has(k)) stores.set(k, new Map()); return stores.get(k); };
 function execCommand(cmd) {
   const op = String(cmd[0]).toUpperCase();
   if (op === 'ZADD') {
     // ["ZADD", key, "GT", score, member]
+    const store = keyStore(String(cmd[1]));
     const flags = cmd.slice(2, -2).map((s) => String(s).toUpperCase());
     const score = Number(cmd[cmd.length - 2]);
     const member = String(cmd[cmd.length - 1]);
@@ -17,6 +20,7 @@ function execCommand(cmd) {
     return prev === undefined ? 1 : 0;
   }
   if (op === 'ZRANGE') {
+    const store = keyStore(String(cmd[1]));
     const start = Number(cmd[2]), stop = Number(cmd[3]);
     const rev = cmd.map((s) => String(s).toUpperCase()).includes('REV');
     const withScores = cmd.map((s) => String(s).toUpperCase()).includes('WITHSCORES');
@@ -25,6 +29,10 @@ function execCommand(cmd) {
     const out = [];
     for (const [m, s] of entries) { out.push(m); if (withScores) out.push(String(s)); }
     return out;
+  }
+  if (op === 'EXPIRE') {
+    ttls.set(String(cmd[1]), Number(cmd[2]));
+    return 1;
   }
   throw new Error('fake upstash: unhandled command ' + op);
 }
@@ -60,9 +68,9 @@ function mockRes() {
   r.json = (o) => { r.body = o; return r; };
   return r;
 }
-const call = async (method, body) => {
+const call = async (method, body, query) => {
   const res = mockRes();
-  await handler({ method, body }, res);
+  await handler({ method, body, query: query || {} }, res);
   return res;
 };
 
@@ -100,6 +108,26 @@ r = await call('POST', { name: '<script>x</script>', score: 10 });
 assert.equal(r.statusCode, 200);
 r = await call('GET');
 assert.ok(r.body.scores.every((s) => !s.name.includes('<')), 'names sanitized');
+
+// ---- daily board ----
+const today = new Date().toISOString().slice(0, 10);
+r = await call('POST', { name: 'DailyDan', score: 1234, board: 'daily' });
+assert.equal(r.statusCode, 200);
+assert.deepEqual(r.body.scores, [{ name: 'DailyDan', score: 1234 }], 'daily POST returns daily board');
+
+r = await call('GET', null, { board: 'daily' });
+assert.equal(r.body.board, 'daily');
+assert.deepEqual(r.body.scores, [{ name: 'DailyDan', score: 1234 }]);
+assert.ok(ttls.has('fractalbloom:daily:' + today), 'daily key gets a TTL');
+
+// daily score also lands on the all-time board
+r = await call('GET');
+assert.ok(r.body.scores.some((s) => s.name === 'DailyDan'), 'daily score included in all-time');
+
+// endless score does NOT land on the daily board
+await call('POST', { name: 'EndlessEve', score: 5555 });
+r = await call('GET', null, { board: 'daily' });
+assert.ok(!r.body.scores.some((s) => s.name === 'EndlessEve'), 'endless score not on daily board');
 
 // bad method
 r = await call('DELETE');

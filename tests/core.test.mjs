@@ -4,6 +4,9 @@ import {
   tierTempo, timingWindows, nearestBeatDelta, judge, multiplierFor,
   scoreFor, isBloomCombo, seedBonus, applyTap, newRunState,
   sanitizeName, validScore, MAX_DEPTH, MAX_SPARKS, BLOOM_EVERY,
+  hashSeed, makeRng, utcDateString, generatePattern, isSurgePhrase,
+  modifierForTier, judgeResponseTap, applyPatternBonus, applySurgeBonus,
+  PATTERN_BONUS, SURGE_BONUS,
 } from '../js/core.js';
 import * as apiValidate from '../api/_validate.js';
 
@@ -128,6 +131,83 @@ test('sanitizeName strips angle brackets/control chars, trims, caps at 20', () =
     assert.equal(fn(42), '');
     assert.equal(fn('nice name_123'), 'nice name_123');
   }
+});
+
+// ---- v2: patterns, surges, modifiers, daily seeds ----
+
+test('makeRng is deterministic and uniform-ish', () => {
+  const a = makeRng(42), b = makeRng(42), c = makeRng(43);
+  const seqA = [a(), a(), a()], seqB = [b(), b(), b()];
+  assert.deepEqual(seqA, seqB);
+  assert.notDeepEqual(seqA, [c(), c(), c()]);
+  for (const v of seqA) assert.ok(v >= 0 && v < 1);
+});
+
+test('hashSeed: stable, distinct for different dates', () => {
+  assert.equal(hashSeed('fb:2026-07-02'), hashSeed('fb:2026-07-02'));
+  assert.notEqual(hashSeed('fb:2026-07-02'), hashSeed('fb:2026-07-03'));
+});
+
+test('utcDateString format', () => {
+  assert.match(utcDateString(new Date('2026-07-02T15:00:00Z')), /^2026-07-02$/);
+});
+
+test('generatePattern: deterministic given seed, always includes downbeat', () => {
+  const p1 = generatePattern(0, makeRng(7));
+  const p2 = generatePattern(0, makeRng(7));
+  assert.deepEqual(p1, p2);
+  for (let tier = 0; tier < 6; tier++) {
+    for (let s = 0; s < 20; s++) {
+      const p = generatePattern(tier, makeRng(s));
+      assert.equal(p.slots[0], 0, 'downbeat included');
+      assert.deepEqual([...p.slots].sort((a, b) => a - b), p.slots, 'slots sorted');
+      assert.equal(new Set(p.slots).size, p.slots.length, 'no duplicate slots');
+      assert.ok(p.slots.every((x) => x >= 0 && x < 8));
+      assert.equal(p.notes.length, p.slots.length);
+      if (tier === 0) assert.ok(p.slots.every((x) => x % 2 === 0), 'tier 0 has no offbeats');
+      assert.equal(p.slots.length, tier === 0 ? 3 : tier < 3 ? 4 : 5);
+    }
+  }
+});
+
+test('isSurgePhrase: every 4th phrase from tier 1', () => {
+  assert.equal(isSurgePhrase(3, 0), false);
+  assert.equal(isSurgePhrase(3, 1), true);
+  assert.equal(isSurgePhrase(7, 2), true);
+  assert.equal(isSurgePhrase(2, 5), false);
+});
+
+test('modifierForTier progression', () => {
+  assert.equal(modifierForTier(0), 'none');
+  assert.equal(modifierForTier(1), 'wind');
+  assert.equal(modifierForTier(2), 'night');
+  assert.equal(modifierForTier(3), 'fireflies');
+  assert.equal(modifierForTier(4), 'wind');
+  assert.equal(modifierForTier(6), 'fireflies');
+});
+
+test('judgeResponseTap: nearest unhit slot, off-pattern is a miss', () => {
+  const w = timingWindows(0);
+  const slots = [10, 10.5, 11];
+  assert.deepEqual(judgeResponseTap(10.01, slots, [false, false, false], w).slot, 0);
+  assert.equal(judgeResponseTap(10.01, slots, [false, false, false], w).judgment, 'perfect');
+  // slot 0 already hit -> nearest unhit is slot 1, 490ms away -> miss
+  const r = judgeResponseTap(10.01, slots, [true, false, false], w);
+  assert.equal(r.slot, -1);
+  assert.equal(r.judgment, 'miss');
+  // 100ms late -> good
+  assert.equal(judgeResponseTap(10.6, slots, [true, false, false], w).judgment, 'good');
+  // everything hit -> miss
+  assert.equal(judgeResponseTap(10.5, slots, [true, true, true], w).slot, -1);
+});
+
+test('pattern and surge bonuses scale with multiplier', () => {
+  let s = newRunState();
+  s.combo = 8; // multiplier 2
+  assert.equal(applyPatternBonus(s).score, PATTERN_BONUS * 2);
+  assert.equal(applySurgeBonus(s).score, SURGE_BONUS * 2);
+  s.combo = 0;
+  assert.equal(applyPatternBonus(s).score, PATTERN_BONUS);
 });
 
 test('validScore accepts sane integers only', () => {

@@ -200,9 +200,14 @@ export class MusicEngine {
   // ---- SFX ----
   pluck(step = 0, perfect = false) {
     if (!this.ctx) return;
+    this.pluckAt(this.ctx.currentTime, step, perfect);
+  }
+
+  // Schedule a pentatonic pluck at an absolute audio-clock time (call melody).
+  pluckAt(t, step = 0, perfect = false, vel = 1) {
+    if (!this.ctx) return;
     const c = this.ctx;
-    const t = c.currentTime;
-    const note = PENTA[Math.min(step, PENTA.length - 1)];
+    const note = PENTA[Math.min(Math.max(0, step), PENTA.length - 1)];
     const o = c.createOscillator();
     o.type = 'triangle';
     o.frequency.value = midi(note);
@@ -211,7 +216,7 @@ export class MusicEngine {
     f.frequency.setValueAtTime(4000, t);
     f.frequency.exponentialRampToValueAtTime(600, t + 0.3);
     const g = c.createGain();
-    const v = perfect ? 0.5 : 0.3;
+    const v = (perfect ? 0.5 : 0.3) * vel;
     g.gain.setValueAtTime(v, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
     o.connect(f).connect(g).connect(this.sfxGain);
@@ -259,5 +264,74 @@ export class MusicEngine {
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
     o.connect(g).connect(this.sfxGain);
     o.start(t); o.stop(t + 0.22);
+  }
+
+  // Rising filtered swell announcing a surge (the "call" of a hold phrase).
+  swellAt(t, dur) {
+    if (!this.ctx) return;
+    const c = this.ctx;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.16, t + dur * 0.8);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    const f = c.createBiquadFilter();
+    f.type = 'lowpass'; f.Q.value = 4;
+    f.frequency.setValueAtTime(200, t);
+    f.frequency.exponentialRampToValueAtTime(2400, t + dur);
+    g.connect(f).connect(this.sfxGain);
+    for (const det of [-6, 6]) {
+      const o = c.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = midi(57); // A3
+      o.detune.value = det;
+      const og = c.createGain(); og.gain.value = 0.5;
+      o.connect(og).connect(g);
+      o.start(t); o.stop(t + dur + 0.1);
+    }
+  }
+
+  // Sustained tone while the player holds; returns a handle to end it.
+  startHoldTone() {
+    if (!this.ctx) return null;
+    const c = this.ctx;
+    const t = c.currentTime;
+    const o = c.createOscillator();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(midi(57), t);
+    o.frequency.linearRampToValueAtTime(midi(69), t + 2.5);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.14, t + 0.08);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t);
+    return {
+      end: (ok) => {
+        const te = c.currentTime;
+        g.gain.cancelScheduledValues(te);
+        g.gain.setValueAtTime(g.gain.value || 0.14, te);
+        g.gain.exponentialRampToValueAtTime(0.001, te + 0.15);
+        o.stop(te + 0.2);
+        if (ok) this.surgeRelease();
+      },
+    };
+  }
+
+  // Big open chord for a successful surge release.
+  surgeRelease() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    [57, 64, 69, 76, 81].forEach((n, i) => {
+      const c = this.ctx;
+      const o = c.createOscillator();
+      o.type = i < 2 ? 'triangle' : 'sine';
+      o.frequency.value = midi(n);
+      const g = c.createGain();
+      const t0 = t + i * 0.03;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.2, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + 1.4);
+      o.connect(g).connect(this.sfxGain);
+      o.start(t0); o.stop(t0 + 1.5);
+    });
   }
 }

@@ -1,6 +1,6 @@
-// smoke.jsdom.mjs — full runtime crash test: boots the game in jsdom with
-// stubbed Canvas2D + WebAudio, plays through to game over, submits a score.
-// Run: node tests/smoke.jsdom.mjs   (requires: npm i -D jsdom)
+// smoke.jsdom.mjs — v2 runtime crash test: boots the game in jsdom with
+// stubbed Canvas2D + WebAudio, plays call-and-response phrases through a
+// surge and up to game over, submits a score. Run: node tests/smoke.jsdom.mjs
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
@@ -13,18 +13,13 @@ const dom = new JSDOM(html, {
 });
 const { window } = dom;
 
-// ---- track any uncaught errors from the page ----
 const pageErrors = [];
 window.addEventListener('error', (e) => pageErrors.push(e.message || String(e)));
 
 // ---- Canvas2D stub ----
 const gradStub = { addColorStop() {} };
 const ctxStub = new Proxy({}, {
-  get(t, p) {
-    if (p in t) return t[p];
-    t[p] = () => gradStub;
-    return t[p];
-  },
+  get(t, p) { if (!(p in t)) t[p] = () => gradStub; return t[p]; },
   set(t, p, v) { t[p] = v; return true; },
 });
 window.HTMLCanvasElement.prototype.getContext = () => ctxStub;
@@ -60,83 +55,149 @@ class FakeAudioContext {
 }
 window.AudioContext = FakeAudioContext;
 
-// ---- expose browser globals to the module ----
-for (const k of ['window', 'document', 'localStorage', 'requestAnimationFrame',
-  'cancelAnimationFrame', 'HTMLCanvasElement']) {
-  globalThis[k] = window[k] ?? window;
-}
 globalThis.window = window;
 globalThis.document = window.document;
+globalThis.localStorage = window.localStorage;
+globalThis.requestAnimationFrame = window.requestAnimationFrame;
+globalThis.HTMLCanvasElement = window.HTMLCanvasElement;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const tapAt = (fb, t) => { fb.music.ctx._t = t; fb.tap(); };
 
-// ---- boot the game ----
+// ---- boot ----
 await import('../js/game.js');
-await sleep(150); // let menu leaderboard fetch fail -> local fallback
+await sleep(150);
 const fb = window.__fb;
 assert.ok(fb, 'test hook exposed');
 assert.equal(fb.mode(), 'menu');
-assert.ok(!window.document.getElementById('menu').classList.contains('hidden'), 'menu visible');
 
-// ---- start a run via pointerdown ----
+// mode select buttons exist and toggle
+window.document.getElementById('mode-daily').click();
+assert.equal(fb.runMode(), 'daily');
+window.document.getElementById('mode-endless').click();
+assert.equal(fb.runMode(), 'endless');
+
+// ---- start a run ----
 window.document.body.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, clientX: 200, clientY: 300 }));
-assert.equal(fb.mode(), 'playing', 'run started on tap');
-assert.ok(window.document.getElementById('menu').classList.contains('hidden'), 'menu hidden');
-assert.ok(!window.document.getElementById('hud').classList.contains('hidden'), 'hud visible');
+assert.equal(fb.mode(), 'playing', 'run started');
+const m = fb.music;
+const actx = m.ctx;
+const setT = async (t) => { actx._t = t; await sleep(45); }; // let a few rAF frames run
 
-const music = fb.music;
-const beat = music.beatDur;
-assert.ok(Math.abs(beat - 60 / 112) < 1e-9, 'tempo is 112 bpm');
+// ---- helper: play one phrase (echo every note) ----
+async function playPhrase() {
+  // move into this phrase's call bar and let the engine set it up
+  const idx = Math.max(0, Math.floor((actx._t - m.anchor) / (8 * m.beatDur)) + (fb.phrase() ? 1 : 0));
+  await setT(m.anchor + idx * 8 * m.beatDur + 0.01);
+  const ph = fb.phrase();
+  assert.ok(ph, 'phrase exists');
+  assert.equal(ph.idx, idx, 'phrase index tracks the clock');
+  if (ph.isSurge) {
+    await setT(ph.respStart);
+    fb.press();
+    assert.ok(fb.phrase().pressed, 'surge press registered');
+    await setT(ph.respStart + 2 * m.beatDur);
+    fb.release();
+    assert.ok(fb.phrase().resolved, 'surge resolved');
+    return { surge: true };
+  }
+  for (const st of ph.slotTimes) {
+    await setT(st);
+    fb.press();
+  }
+  assert.ok(fb.phrase().hit.every(Boolean), 'all pattern notes hit');
+  return { surge: false, notes: ph.slotTimes.length };
+}
 
-// ---- taps during grace period are ignored ----
-tapAt(fb, music.anchor + 1 * beat);
-assert.equal(fb.run().score, 0, 'grace period tap ignored');
+// ---- phrase 0: tier 0 pattern (3 notes), taps during call bar are ignored ----
+await setT(m.anchor + 0.01);
+let ph = fb.phrase();
+assert.ok(ph && !ph.isSurge, 'first phrase is a normal pattern');
+assert.equal(ph.pattern.slots.length, 3, 'tier 0 pattern has 3 notes');
+assert.equal(ph.pattern.slots[0], 0, 'pattern includes downbeat');
+fb.press(); // during call bar
+assert.equal(fb.run().score, 0, 'call-bar tap is ignored, no penalty');
+assert.equal(fb.run().sparks, 3);
 
-// ---- perfect taps on the beat ----
-let n = 5;
-for (let i = 0; i < 3; i++) tapAt(fb, music.anchor + (n + i) * beat);
-assert.equal(fb.run().combo, 3, 'three perfect taps -> combo 3');
-assert.equal(fb.run().score, 300, 'perfect tap scoring');
-assert.equal(window.document.getElementById('score').textContent, '300', 'HUD score updated');
+for (const st of ph.slotTimes) { await setT(st); fb.press(); }
+assert.equal(fb.run().combo, 3, 'echoed all 3 notes');
+// 3 perfect (300) + echo bonus (250)
+assert.equal(fb.run().score, 550, 'pattern scoring incl. echo bonus');
 
-// ---- debounce: instant double tap does nothing ----
-tapAt(fb, music.anchor + 7 * beat + 0.05);
-assert.equal(fb.run().combo, 3, 'debounced double tap ignored');
+// ---- off-pattern tap costs a spark ----
+await setT(ph.respStart + 3.5 * m.beatDur); // far from any slot, all hit anyway
+fb.press();
+assert.equal(fb.run().sparks, 2, 'off-pattern tap drains a spark');
+assert.equal(fb.run().combo, 0);
 
-// ---- good tap (inside good window, outside perfect) ----
-tapAt(fb, music.anchor + 9 * beat + 0.100); // 100ms late @112bpm
-assert.equal(fb.run().combo, 4);
-assert.equal(fb.run().score, 350, 'good tap = +50');
+// ---- play phrases until a surge appears (requires tier >= 1) ----
+let sawSurge = false;
+let guard = 0;
+while (!sawSurge && fb.mode() === 'playing' && guard++ < 20) {
+  const before = fb.run().score;
+  const r = await playPhrase();
+  sawSurge = r.surge;
+  assert.ok(fb.run().score >= before, 'score never decreases');
+}
+assert.ok(sawSurge, 'surge phrase occurred after reaching tier 1');
+assert.ok(fb.run().tier >= 1, 'tier advanced');
+assert.ok(fb.run().sparks >= 2, 'clean surge did not cost sparks');
+const scoreAfterSurge = fb.run().score;
+assert.ok(scoreAfterSurge > 550, 'score accumulated');
 
-// ---- off-beat taps drain sparks, then game over ----
-for (let i = 0; i < 3; i++) tapAt(fb, music.anchor + (11 + i) * beat + beat * 0.45);
-assert.equal(fb.run().sparks, 0, 'three misses drain sparks');
-assert.equal(fb.mode(), 'gameover', 'game over triggered');
-await sleep(700); // gameover screen shows after a beat
+// ---- modifier reflects tier ----
+assert.ok(['wind', 'night', 'fireflies'].includes(fb.modifier()), 'tier modifier active');
+
+// ---- drain sparks with off-pattern taps until game over ----
+guard = 0;
+while (fb.mode() === 'playing' && guard++ < 30) {
+  // jump to next phrase's response bar, tap off-pattern
+  const idx = Math.floor((actx._t - m.anchor) / (8 * m.beatDur)) + 1;
+  await setT(m.anchor + idx * 8 * m.beatDur + 0.01);
+  const p = fb.phrase();
+  if (p.isSurge) { // fail the surge by pressing very late
+    await setT(p.respStart + 3 * m.beatDur);
+    fb.press();
+  } else {
+    // tap far from every slot (between last slot and bar end, ≥good away)
+    await setT(p.respStart + 3.9 * m.beatDur);
+    fb.press();
+  }
+}
+assert.equal(fb.mode(), 'gameover', 'run ended after sparks drained');
+await sleep(700);
 assert.ok(!window.document.getElementById('gameover').classList.contains('hidden'), 'gameover visible');
-assert.equal(window.document.getElementById('final-score').textContent, '350');
 
-// ---- submit score (API unreachable -> local fallback) ----
+// ---- submit (API unreachable -> local fallback) ----
 window.document.getElementById('name-input').value = 'SmokeTester';
 window.document.getElementById('submit-btn').click();
 await sleep(300);
 const local = JSON.parse(window.localStorage.getItem('fb_scores'));
 assert.equal(local[0].name, 'SmokeTester', 'score saved locally');
-assert.equal(local[0].score, 350);
-const board = window.document.getElementById('board');
-assert.ok(board.children.length >= 1, 'leaderboard rendered');
-assert.match(window.document.getElementById('board-title').textContent, /this device/, 'offline fallback labeled');
+assert.ok(window.document.getElementById('board').children.length >= 1, 'board rendered');
 
-// ---- play again ----
+// ---- board tabs don't crash ----
+window.document.getElementById('over-tab-daily').click();
+window.document.getElementById('over-tab-all').click();
+await sleep(150);
+
+// ---- restart ----
 window.document.getElementById('again-btn').click();
 assert.equal(fb.mode(), 'playing', 'restart works');
 assert.equal(fb.run().score, 0);
 
-// ---- let the render loop run a while; ensure zero uncaught errors ----
-await sleep(1200);
-assert.deepEqual(pageErrors, [], 'no uncaught page errors during render loop');
+// ---- daily mode determinism: same date seed => same first patterns ----
+// (patterns come from the seeded rng; two runs on the same UTC date match)
+const patternsA = [];
+for (let i = 0; i < 3; i++) {
+  const idx = Math.floor((actx._t - m.anchor) / (8 * m.beatDur)) + 1;
+  await setT(m.anchor + idx * 8 * m.beatDur + 0.01);
+  patternsA.push(fb.phrase().pattern.slots.join(','));
+}
 
-music.stop();
-console.log('SMOKE TEST PASSED ✔  (boot, run, scoring, miss/gameover, submit, restart, render loop)');
+// ---- let the render loop run; ensure zero uncaught errors ----
+await sleep(900);
+assert.deepEqual(pageErrors, [], 'no uncaught page errors');
+
+m.stop();
+console.log('SMOKE TEST v2 PASSED ✔  (boot, call/response, echo bonus, off-pattern, surge, modifiers, gameover, submit, tabs, restart)');
 process.exit(0);

@@ -144,6 +144,35 @@ button:hover { background: rgba(255, 255, 255, 0.13); border-color: var(--accent
 button:disabled { opacity: 0.5; cursor: default; }
 #again-btn { margin-top: 4px; padding: 13px 30px; }
 
+.mode-row { display: flex; gap: 10px; }
+.chip {
+  padding: 9px 18px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--ink-dim);
+  background: transparent;
+}
+.chip.sel {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: rgba(140, 220, 240, 0.08);
+}
+
+.tab-row { display: flex; gap: 6px; justify-content: center; margin-bottom: 8px; }
+.tab {
+  padding: 5px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.tab.sel { color: var(--accent); background: rgba(140, 220, 240, 0.08); }
+.tab:hover { background: rgba(255, 255, 255, 0.06); }
+
 #mute-btn {
   position: fixed; top: 20px; left: 20px; z-index: 20;
   padding: 8px 12px; font-size: 12px;
