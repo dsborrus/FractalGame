@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Fractal Bloom</title>
+<meta name="description" content="A minimal rhythm game. Tap with the pulse. Grow the tree. Bloom.">
+<meta name="theme-color" content="#07070c">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❋</text></svg>">
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<button id="mute-btn" aria-label="toggle sound">♪ on</button>
+
+<div id="menu" class="screen">
+  <h1>FRACTAL<span>bloom</span></h1>
+  <p class="tagline">tap with the pulse · grow the tree · bloom</p>
+  <div class="board-wrap ui-block">
+    <h2 id="menu-board-title">top blooms</h2>
+    <ol id="menu-board"></ol>
+  </div>
+  <p class="cta">tap anywhere to begin</p>
+</div>
+
+<div id="hud" class="hidden">
+  <div id="score">0</div>
+  <div id="combo"></div>
+  <div id="sparks"><i></i><i></i><i></i></div>
+  <div id="tier"></div>
+</div>
+<p id="hint" class="hidden"></p>
+
+<div id="gameover" class="screen hidden">
+  <h2 class="over-label">the tree rests</h2>
+  <div id="final-score">0</div>
+  <p id="final-stats"></p>
+  <div class="submit-row ui-block">
+    <input id="name-input" maxlength="20" placeholder="your name" autocomplete="off">
+    <button id="submit-btn">submit score</button>
+  </div>
+  <div class="board-wrap ui-block">
+    <h2 id="board-title"></h2>
+    <ol id="board"></ol>
+  </div>
+  <button id="again-btn">bloom again</button>
+</div>
+
+<script type="module" src="js/game.js"></script>
+</body>
+</html>

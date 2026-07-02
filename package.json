@@ -1,0 +1,17 @@
+{
+  "name": "fractal-bloom",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A minimal rhythm game \u2014 tap with the pulse, grow the fractal, bloom.",
+  "scripts": {
+    "test": "node --test tests/core.test.mjs && node tests/api.test.mjs && node tests/smoke.jsdom.mjs",
+    "dev": "npx serve ."
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.34.3"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1"
+  }
+}
